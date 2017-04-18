@@ -1,8 +1,8 @@
 Package: albert
-Version: $VERSION
+Version: PACKAGE_VERSION
 Section: base
 Priority: optional
 Architecture: amd64
-Depends:
+Depends: libmuparser2v5
 Maintainer: Thomas Nordquist
 Description: Albert Launcher

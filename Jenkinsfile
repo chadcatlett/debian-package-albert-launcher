@@ -1,53 +1,102 @@
 node {
 	deleteDir()
 
-	stage('checkout') {
-		dir('ci') {
-			checkout scm
-		}
-
-		dir('albert') {
-			checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[url: 'https://github.com/albertlauncher/albert.git']]])
-		}
+	dir('ci') {
+		checkout scm
 	}
 
-	def app
+	dir('albert') {
+		checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[url: 'https://github.com/albertlauncher/albert.git']]])
+
+		// Derive version number from latest tag + jenkins build number
+		sh "echo `git describe --abbrev=0 --tags | sed s/^v//g`-${env.BUILD_NUMBER} > ../PACKAGE_VERSION"
+	}
+
+	stash 'ci'
+	stash 'albert'
+	stash 'PACKAGE_VERSION'
+
+	def ubuntuVersions = [/*"14.04", "14.10", "15.04", "15.10",*/ "16.04", "16.10", "17.04"]
+
 	stage('install dependencies') {
-		dir('ci') {
-			// Use docker cache to minimize build time
-			app = docker.build('albert-launcher')
+		def jobs = [:]
+
+		// Create dockerfile based of template
+		for (version in ubuntuVersions) {
+			def v = version
+			def buildImageClosure = { node {
+				unstash 'ci'
+				dir('ci') {
+					sh "cat Dockerfile.tpl | sed s/UBUNTU_VERSION/${v}/g > Dockerfile.${v}"
+					// Use docker cache to minimize build time
+					catchError {
+						docker.build("build-albert:${v}", "-f Dockerfile.${v} .")
+					}
+				}
+			}}
+
+			jobs[v] = buildImageClosure
 		}
+		parallel jobs
 	}
 
 	stage('make') {
-		sh "mkdir -p albert/build"
+		def jobs = [:]
+		for (v in ubuntuVersions) {
+			def version = v
+			def makeClosure = { node {
+				unstash 'albert'
 
-		dir('albert/build') {
-			app.inside {
-				sh "cmake .. -DCMAKE_BUILD_TYPE=Release"
-				sh "make"
-			}
+				sh "cp -a albert albert-${version}"
+				sh "mkdir -p albert-${version}/build"
+
+				def app = docker.image("build-albert:${version}")
+				dir("albert-${version}/build") {
+					app.inside {
+						sh "cmake .. -DCMAKE_BUILD_TYPE=Release"
+						sh "make"
+
+						// Install albert into custom directory
+						sh "make DESTDIR=albertbuild-${version} install"
+					}
+					stash "albertbuild-${version}"
+				}
+			}}
+
+			jobs[version] = makeClosure
 		}
+		parallel jobs
   }
 
 	stage('package') {
-		dir('albert/build') {
-			app.inside {
-				// Install albert into custom directory
-				sh "make DESTDIR=/tmp/albertbuild install"
+		def jobs = [:]
 
-				// Derive version number from latest tag + jenkins build number
-				sh "echo `git describe --abbrev=0 --tags | sed s/^v//g`-${env.BUILD_NUMBER} > VERSION"
+		for (v in ubuntuVersions) {
+			def version = v
+			def job = { node {
+				def app = docker.image("ubuntu:${version}")
+				def buildDirectory = "albertbuild-${version}"
 
-				// Prepare directory for packaging
-				sh "mkdir -p /tmp/albertbuild/DEBIAN"
-				// Create DEBIAN/control file With current VERSION
-				sh "VERSION=`cat VERSION` envsubst < ../../ci/DEBIAN-control > /tmp/albertbuild/DEBIAN/control"
+				unstash buildDirectory
+				unstash 'ci'
+				unstash 'PACKAGE_VERSION'
 
-				// Pack albert-VERSION-BUILD_NUMBER.deb file
-				sh "dpkg-deb -b /tmp/albertbuild albert-`cat VERSION`.deb"
-			}
-			archiveArtifacts '*.deb'
+				app.inside {
+					// Prepare directory for packaging
+					sh "mkdir -p ${buildDirectory}/DEBIAN"
+					// Create DEBIAN/control file With current VERSION
+					sh "cat ci/DEBIAN-control | sed s/PACKAGE_VERSION/`cat PACKAGE_VERSION`/g > ${buildDirectory}/DEBIAN/control"
+					// Fix permissions, the suid bit has been set for the complete directory (can't explain why every file in the workspace has it but it's a very bad idea to keep it while packaging)
+					sh "chmod -R -s ${buildDirectory}"
+					// Pack albert-VERSION-BUILD_NUMBER.deb file
+					sh "dpkg-deb -b ${buildDirectory} albert-`cat PACKAGE_VERSION`-${version}.deb"
+				}
+
+				archiveArtifacts '*.deb'
+
+			}}
+			jobs[version] = job
 		}
+		parallel jobs
 	}
 }
