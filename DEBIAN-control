@@ -1,0 +1,8 @@
+Package: albert
+Version: $VERSION
+Section: base
+Priority: optional
+Architecture: amd64
+Depends:
+Maintainer: Thomas Nordquist
+Description: Albert Launcher
