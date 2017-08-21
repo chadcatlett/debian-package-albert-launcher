@@ -1,4 +1,4 @@
-FROM ubuntu:UBUNTU_VERSION
+FROM debian:DEBIAN_VERSION
 
 RUN apt-get update \
   && apt-get install -y git-core build-essential gcc g++ \

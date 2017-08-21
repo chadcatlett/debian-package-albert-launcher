@@ -16,18 +16,18 @@ node {
 	stash 'albert'
 	stash 'PACKAGE_VERSION'
 
-	def ubuntuVersions = [/*"14.04", "14.10", "15.04", "15.10",*/ "16.04", "16.10", "17.04"]
+	def debianVersions = ["sid", "unstable"]
 
 	stage('install dependencies') {
 		def jobs = [:]
 
 		// Create dockerfile based of template
-		for (version in ubuntuVersions) {
+		for (version in debianVersions) {
 			def v = version
 			def buildImageClosure = { node {
 				unstash 'ci'
 				dir('ci') {
-					sh "cat Dockerfile.tpl | sed s/UBUNTU_VERSION/${v}/g > Dockerfile.${v}"
+					sh "cat Dockerfile.tpl | sed s/DEBIAN_VERSION/${v}/g > Dockerfile.${v}"
 					// Use docker cache to minimize build time
 					catchError {
 						docker.build("build-albert:${v}", "-f Dockerfile.${v} .")
@@ -42,7 +42,7 @@ node {
 
 	stage('make') {
 		def jobs = [:]
-		for (v in ubuntuVersions) {
+		for (v in debianVersions) {
 			def version = v
 			def makeClosure = { node {
 				unstash 'albert'
@@ -71,10 +71,10 @@ node {
 	stage('package') {
 		def jobs = [:]
 
-		for (v in ubuntuVersions) {
+		for (v in debianVersions) {
 			def version = v
 			def job = { node {
-				def app = docker.image("ubuntu:${version}")
+				def app = docker.image("debian:${version}")
 				def buildDirectory = "albertbuild-${version}"
 
 				unstash buildDirectory
